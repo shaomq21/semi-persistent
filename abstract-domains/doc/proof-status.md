@@ -5,7 +5,7 @@ Last refreshed: 2026-09-23.
 ## Current result
 
 The historical crate-wide figure below is the L1–L4 machine domains and does
-**not** include IntervalZ. IntervalZ is reported separately in its section.
+**not** include IntervalZ or Bool4. Those are reported in their own sections.
 
 ```text
 cargo verus verify
@@ -117,3 +117,21 @@ cargo verus verify -p semi-persistent-abstract-domains -- --verify-only-module i
 `cargo test -p semi-persistent-abstract-domains --test interval_z` (22 tests)
 covers the executable transfers, the `[-8,-1]/[-4,-2]` quotients, fuel
 exhaustion, UBig and open endpoints.
+
+## Bool4 (Task 1 §2, piece A)
+
+`abstract-domains/src/bool4.rs` is the four-point boolean
+`Bottom | False | True | Top`. Comparisons and backward narrowing are piece B;
+the split is [bool4-split.md](bool4-split.md).
+
+Proved, with no `admit()`/`assume()`: containment of `join`, `meet`, `not`,
+`and`, and `or`; the §3.5 laws of `meet` and `join`; monotonicity of `not`,
+`and`, and `or`.
+
+```text
+cargo verus verify -p semi-persistent-abstract-domains -- --verify-only-module bool4 --rlimit 50
+21 verified, 0 errors
+```
+
+`cargo test -p semi-persistent-abstract-domains --test bool4` (3 tests) enumerates
+the lattice laws and the concrete boolean operations.

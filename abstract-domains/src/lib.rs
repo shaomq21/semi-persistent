@@ -17,6 +17,7 @@
 //! - IntervalZ: closed intervals over unbounded integers (NegInf / Fin(IBig) / PosInf)
 
 pub mod anum;
+pub mod bool4;
 pub mod bools;
 pub mod chopped;
 pub mod demo;
