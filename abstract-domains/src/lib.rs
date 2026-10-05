@@ -14,7 +14,10 @@
 //!   ReducedProduct) - executable u8/u16/u32/u64 implementations. The u128
 //!   instantiation is disabled because its bitvector proofs exceed current
 //!   solver capacity.
-//! - IntervalZ: closed intervals over unbounded integers (NegInf / Fin(IBig) / PosInf)
+//! - Shared interface: lattice (Domain, BotOr), word (Word), semantics
+//!   (Semantics), transfer (Arith, DivRem, DivZero); reference domains
+//!   interval (Interval<W>) and interval_z (IntervalZ over ibig::IBig).
+//!   See doc/domain-traits.md.
 
 pub mod anum;
 pub mod bool4;
@@ -25,10 +28,13 @@ pub mod div;
 pub mod domains;
 pub mod exec_tnum;
 pub mod ibig;
+pub mod interval;
 pub mod interval_z;
-pub mod kata;
-pub mod kata5;
+pub mod lattice;
 pub mod nats;
+pub mod semantics;
 pub mod tbit;
 pub mod tnum;
+pub mod transfer;
 pub mod unum;
+pub mod word;

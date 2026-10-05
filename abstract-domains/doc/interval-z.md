@@ -1,137 +1,104 @@
 # IntervalZ
 
-Unbounded integer intervals, in [src/ibig.rs](../src/ibig.rs) and [src/interval_z.rs](../src/interval_z.rs).
+Unbounded integer intervals, in [src/ibig.rs](../src/ibig.rs) and [src/interval_z.rs](../src/interval_z.rs). The shape is the shared domain interface in [domain-traits.md](domain-traits.md).
 
 ```text
-Bound     = NegInf | Fin(IBig) | PosInf
-IntervalZ = { empty, lo: Bound, hi: Bound }
+Lo        = NegInf | Fin(IBig)
+Hi        = Fin(IBig) | PosInf
+IntervalZ = { lo: Lo, hi: Hi }     private fields, lo <= hi when both are finite
 values    = every integer z with lo <= z <= hi
+empty     = BotOr::Bot, outside the type
 ```
 
-`empty` has no values. A well-formed nonempty interval has `lo <= hi`. 
+There is no `empty` flag. A well-formed value is nonempty, and each set has one representation.
 
-## 1. Integers (`IBig`)
+## Integers (`IBig`)
 
-`IBig` is the finite endpoint. The payload is `num_bigint::BigInt`. The spec view is mathematical `int`, so endpoint arithmetic does not wrap.
+`IBig` is a trusted wrapper around `num_bigint::BigInt`. Its spec view is mathematical `int`. The trusted items, including `sub`, `mul`, `div_euclid`, and `div_trunc`, are listed in the ledger in [domain-traits.md](domain-traits.md). `div_euclid` is Verus `int` `/` (nonnegative remainder). `div_trunc` divides toward zero. This module is not verified code.
 
-## 2. Endpoints (`Bound`)
+## Domain
 
-`le`, `eq_bound`, `min`, and `max` follow `bound_le` and `bound_eq`.
+`Domain` provides `top` (`[-∞, +∞]`), `leq`, `join`, `meet -> BotOr`, and Cousot `widen`. An unstable bound jumps to `±∞`, so the chain `[0,0]`, `[0,1]`, `[0,2]`, … reaches `+∞` in one step. `meet` of disjoint intervals is `Bot`. Contracts are soundness against `gamma`, with explicit `#[trigger]`s. `lemma_canonical` says equal concretizations are equal values.
 
-Interval add, neg, mul, and div call these endpoint operations.
+## Arithmetic
 
+`Arith<Euclid>` and `Arith<Trunc>` share `add`, `sub`, and `neg`, which are exact on the endpoints. Addition of an infinite bound is that infinity. `Mul<Euclid>` and `Mul<Trunc>` take the four endpoint products. `0 * ±∞ = 0`. Comparing those products borrows them and copies only the smaller or the larger one.
 
-| Operation | Implementation                                                                                                                                                                                     | Verified                       |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `add`     | `Fin + Fin` is the exact sum. A `−∞` summand yields `−∞`, and a `+∞` summand yields `+∞`. The two opposite pairs are fixed first: `−∞ + +∞ = −∞`, `+∞ + −∞ = +∞`                                   | result equals `add_bound_spec` |
-| `neg`     | `−∞` and `+∞` swap. `Fin(n)` becomes `Fin(−n)`                                                                                                                                                     | result equals `neg_bound_spec` |
-| `ext_mul` | `Fin * Fin` is the exact product. `0 * ±∞ = 0`. A positive finite endpoint keeps the sign of an infinity; a negative one flips it. Same-sign infinities yield `+∞`; opposite infinities yield `−∞` | result equals `ext_mul_spec`   |
-| `ext_div` | a zero `Fin` divisor returns `None`. A finite dividend over `±∞` is `0`. `±∞ / ±∞` uses the sign rule above. `Fin / Fin` is the Euclidean quotient                                                 | result equals `ext_div_spec`   |
+## Division
 
+`DivRem<Euclid>::div` and `DivRem<Trunc>::div` return `(BotOr<IntervalZ>, DivZero)`.
 
-## 3. Intervals
+| `DivZero` | When                                       | Quotient           |
+| --------- | ------------------------------------------ | ------------------ |
+| `Always`  | the divisor is `{0}`                       | `Bot`              |
+| `Never`   | the divisor excludes 0                     | endpoint quotients |
+| `Maybe`   | the divisor contains 0 and another integer | split, then join   |
 
-`bottom` is `empty` with dummy endpoints `Fin(0)`. `top` is `[−∞, +∞]`. `constant(n)` is the singleton `[n, n]`.
+Both directions are proved: `Never` if and only if 0 is absent, and `Always` if and only if every concrete divisor is 0. `div_nonzero` is private and requires that the divisor exclude 0.
 
+A divisor that contains 0 is split into `(-∞, -1]` and `[1, +∞)`. Each side is divided separately and the results are joined. A wholly negative divisor is negated, divided, and the quotient is negated.
 
-| Operation  | Implementation                                           | Verified                                                                |
-| ---------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `bottom`   | `empty = true`                                           | well-formed, equals `bottom_spec`, and `has` is false for every integer |
-| `top`      | `[−∞, +∞]`                                               | well-formed, equals `top_spec`, and `has` is true for every integer     |
-| `constant` | both endpoints `Fin(n)`                                  | well-formed, nonempty, and contains `n`                                 |
-| `range`    | keep the bounds when they are ordered; otherwise bottom  | well-formed, and the postcondition in the paragraph above               |
-| `arith`    | the same test; failure is top                            | well-formed, equals `arith_spec`                                        |
-| `contains` | compare the integer with both endpoints; false on bottom | matches `has`                                                           |
+Endpoint quotients when the divisor is positive:
 
+- a negative lower bound is divided by the smaller positive endpoint;
+- a nonnegative lower bound is divided by the larger one, and `+∞` contributes `0`;
+- a nonnegative upper bound is divided by the smaller positive endpoint;
+- a negative upper bound is divided by the larger one. Euclidean `+∞` contributes `-1`. Truncation contributes `0`.
 
-## 4. Lattice
+So `[-8, -1] / [1, +∞)` is `[-∞, -1]` for Euclidean division, not an interval that contains `0`. Truncation of `-7 / 2` is `-3`; the Euclidean quotient is `-4`.
 
+When the quotient of two finite intervals is a single integer, the remainder is `x - q * y` at the four corners, so a singleton division is exact: Euclidean `10 % 3 = 1` and `-7 % 2 = 1`, while truncation gives `-7 % 2 = -1`. Otherwise the remainder is the magnitude bound: Euclidean `0 <= r < |y|`, and truncation keeps the sign of the dividend. `DivZero` is the same flag as for the quotient.
 
-| Operation | Verified                                                                                        |
-| --------- | ----------------------------------------------------------------------------------------------- |
-| `meet`    | well-formed; equals `meet_spec` up to `eq_abs`; `has` is exactly the intersection               |
-| `join`    | well-formed; equals `join_spec` up to `eq_abs`; every value of either argument is in the result |
+`narrow` replaces an infinite endpoint of the first interval by the same endpoint of the second, and returns `Bot` if the bounds cross. Every concrete value that lies in both intervals survives, and every surviving value was already in the first interval. `refine(fact, budget)` is one `meet` when `budget > 0`, and it leaves the interval unchanged when `budget == 0`. The result contains a concrete value exactly when that value satisfies both intervals and fuel was spent. `meet_chain` repeats that step. Its soundness proof says a value in the start value and in every fact is still present, including when fuel runs out before the facts do.
 
+## Review checklist
 
-Lattice laws, included in the verification count:
+Each item states the review requirement, then the implementation.
 
+**1. Target type.** Use the #116 shape: `IntervalZ` with `Lo { NegInf, Fin(IBig) }` and `Hi { Fin(IBig), PosInf }`, private fields, and `lo <= hi` when both ends are finite. Prove the representation canonical, and implement `Domain` (Cousot widening) plus `Arith<Euclid>` and `Arith<Trunc>`.
 
-| Theorem                                                                 | Statement                       |
-| ----------------------------------------------------------------------- | ------------------------------- |
-| `meet_comm`, `meet_idempotent`, `meet_assoc`, `meet_top`, `meet_bottom` | laws of `meet_spec`             |
-| `join_comm`, `join_idempotent`, `join_assoc`, `join_top`, `join_bottom` | laws of `join_spec`             |
-| `meet_monotone`                                                         | `a ⊑ b` implies `a ⊓ c ⊑ b ⊓ c` |
-| `join_monotone`                                                         | `a ⊑ b` implies `a ⊔ c ⊑ b ⊔ c` |
+The struct stores only private `lo` and `hi`. `wf` requires `lo.view() <= hi.view()` when both ends are `Fin`. `lemma_canonical` shows that two well-formed intervals with the same integer set have the same bounds. Both `Arith` impls provide add, sub, and neg. `widen` is Cousot: a looser lower bound becomes `NegInf`, and a looser upper bound becomes `PosInf`.
 
+**2. Replace the division placeholders.** `DivRem<Euclid>` and `DivRem<Trunc>` were top placeholders with an exact `DivZero`. Put the precise division in their place. A `[0, 0]` divisor returns `Bot`, matching `DivZero::Always`.
 
-## 5. Arithmetic
+`div` goes through `div_general`. Both ends `Fin(0)` returns `(Bot, Always)`. A divisor that excludes 0 uses the private `div_nonzero`. A divisor that contains 0 and some other integer is split into `(-∞, -1]` and `[1, +∞)`, each side is divided, and the results are joined, with flag `Maybe`.
 
+**3. Remove the empty flag.** `IntervalZ { empty, lo, hi }` is well-formed for any bounds when `empty = true`, so there are infinitely many bottoms. `PartialEq` then disagrees with `eq_abs`, and a fixpoint `==` check misses stabilization. Bottom lives outside the domain: every well-formed value denotes a nonempty set, and emptiness is `lattice::BotOr::Bot`.
 
-| Operation | Implementation                                          | Verified                                                                                               |
-| --------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `add`     | `arith(lo + lo, hi + hi)`                               | equals `add_spec`; every concrete `x + y` is in the result                                             |
-| `neg`     | `arith(−hi, −lo)`                                       | equals `neg_spec`; every concrete `−x` is in the result                                                |
-| `sub`     | `add` of `neg` on the subtrahend                        | equals `sub_spec`; every concrete `x − y` is in the result                                             |
-| `mul`     | min and max of the four `ext_mul` corners, then `arith` | equals `mul_spec`; every concrete product is in the result, including unbounded endpoints and `0 * ±∞` |
+The struct stores only `lo` and `hi`. `meet` takes the tighter bounds and returns `BotOr::Bot` when they cross.
 
+**4. Euclidean division, plus truncation.** Port the Euclidean division that splits the divisor at 0 into `DivRem<Euclid>`, and add truncated division as `DivRem<Trunc>`. C and Rust truncate toward zero: `-7 / 2 = -3`, while Euclidean division gives `-4`. The alarm is `DivZero`.
 
-Monotonicity has the same shape for each of these: if `a ⊑ b` and the other operand stays fixed, the result on `a` refines the result on `b`.
+`DivRem<Euclid>::div` uses Verus `x / y` (nonnegative remainder). `DivRem<Trunc>::div` uses `tdiv`. `IBig::div_euclid` starts from truncating `BigInt` division and adjusts the quotient when the remainder is negative. `IBig::div_trunc` is `BigInt` `/`. The test `[-7, -7] / [2, 2]` checks Euclidean `-4` and truncated `-3`.
 
-## 6. Division and alarms
+**5. `narrow` returns `BotOr`.** `narrow` replaces only the infinite endpoints of the receiver: `NegInf` takes the other interval's lower bound, and `PosInf` takes its upper bound. Finite bounds that cross return `Bot`. The proof says every integer in both intervals stays in the result, and every integer in the result was already in the first interval. `[-∞, +∞)` narrowed by `[1, 2]` is `[1, 2]`. `[0, +∞)` narrowed by `[-5, -1]` is `Bot`.
 
-`Alarm` is the set of possible error bits, not a severity.
+**6. Widening.** The old `widen` was `join` (`widen_spec == join_spec`), so `[0, 0], [0, 1], [0, 2], …` never stabilizes. Use Cousot widening, which #116 already provides. Thresholds are optional.
 
+Cousot widening is in place, and thresholds are not added. A looser lower bound becomes `NegInf`; a looser upper bound becomes `PosInf`. `[0, 0] ∇ [0, 1]` contains `0` and `100`, and excludes `-1`.
 
-| Alarm           | Concrete error bit |                                                  |
-| --------------- | ------------------ | ------------------------------------------------ |
-| `NoError`       | `{false}`          | the divisor contains no zero                     |
-| `DefiniteError` | `{true}`           | the divisor is exactly `{0}`                     |
-| `MaybeError`    | `{false, true}`    | the divisor contains zero and some other integer |
+**7. `IBig` is trusted; do not add a second wrapper.** `ibig.rs` is an external struct, `external_body` methods, and broadcast axioms. It should not be described as verified. Use #116's `IBig` and add the needed operations (`sub`, `mul`, `div`) to the ledger in `doc/domain-traits.md` §7.
 
+The code uses that `IBig`. After the existing `add` and `neg`, it adds `sub`, `mul`, `div_euclid`, and `div_trunc`, all `external_body`. The ledger lists them and states that `div_euclid`'s spec is Verus `int` `/`. The docs treat the module as a trust boundary.
 
-`div_one` is division by an interval that is not split. It takes the min and max of the four `ext_div` corners when every corner is `Some`. Any `None` (a zero endpoint) makes `div_one` return top. Verified: the result equals `div_one_spec`, and if the divisor contains no zero then every concrete Euclidean quotient is in the result.
+**8. Soundness for `refine` and `meet_chain`.** Those specs stated only precision (`r ⊑ self`). State soundness against `gamma`.
 
-`div(a, d)` then classifies the divisor:
+`refine(fact, 0)` keeps the original interval. `budget > 0` meets once: an integer is in the result exactly when it is in both intervals. `meet_chain` repeats that step. Fuel `0` stops at the current value. A meet that leaves the concrete set unchanged spends no fuel; a strict meet spends `1`. `meet_chain_sound` proves that an integer in the start value and in every fact is still present at the end, including when fuel runs out first.
 
-1. Either argument is empty: bottom, `NoError`.
-2. `d` is the singleton `{0}`: bottom, `DefiniteError`.
-3. `d` contains `0`: meet `d` with `(−∞, −1]` and with `[1, +∞)`, run `div_one` on each side, and join the quotients. Alarm `MaybeError`.
-4. Otherwise: `div_one(a, d)`, alarm `NoError`.
+**9. Triggers, and crossed bounds.** Replace `#![auto]` with explicit triggers. Require well-formed bounds instead of mapping a crossed pair to top.
 
-Verified for `div`: the value equals `div_spec` up to `eq_abs`, the alarm equals `div_spec`, every quotient by a nonzero concrete divisor is in the value, and `y == 0` is an element of the alarm exactly when a concrete pair has that error bit.
+`interval_z.rs` uses `#[trigger]` and has no `#![auto]`. `new` returns `None` when a finite lower bound is greater than a finite upper bound.
 
-## 7. Widen, narrow, and fuel
+**10. The alarm's "exactly when" had one direction.** Both directions are proved. `classify` ensures `Never` if and only if `0` is absent, and `Always` if and only if every concrete divisor is `0`.
 
+**11. Finite negative divided by `±∞`.** A finite negative divided by `±∞` produced `0`. The limit is `∓1`.
 
-| Operation | Implementation                                                                                                                                 | Verified                                                                                                  |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `widen`   | loop over the four endpoints of both arguments and keep the least lower bound and greatest upper bound. An empty argument is ignored           | equals the convex hull (`join`); both arguments refine the result, and so does their join                 |
-| `narrow`  | an infinite endpoint is replaced by the other argument's endpoint; a crossed result is bottom                                                  | equals `narrow_spec` up to `eq_abs`; the result refines the first argument, and `meet` refines the result |
-| `refine`  | fuel `0` keeps the value and returns fuel `0`. A meet that changes the value spends `1`. A meet that leaves the value unchanged spends nothing | the pair matches `refine_value` and `refine_fuel`; the value refines the start                            |
+When the divisor's lower bound is `>= 1`, the dividend's upper bound is negative, and the divisor's upper bound is `PosInf`, the Euclidean quotient's upper bound is `Fin(-1)` and the truncated one is `Fin(0)`. A wholly negative divisor heading toward `−∞` is negated into a positive interval (`−∞` becomes `+∞`), divided, and the quotient is negated, so `-1` becomes `+1`. The test `[-8, -1] / [1, +∞)` checks that the Euclidean result contains `-1` and excludes `0`.
 
+**12. `div_one` must exclude 0.** `div_one` was public and had no `!d.has(0)` precondition, so a caller could get a result that misses quotients.
 
-## 8. Guards
+The public `div_one` is removed. The private `div_nonzero` requires `!d.gamma(0)`. Only divisors that exclude 0 enter it. A divisor that contains 0 is split first, and each side excludes 0.
 
+**13. Multiplication, and `min` / `max` should return references.** `mul` was 20–39× slower than an `i64` interval because `min` and `max` cloned their arguments. Returning references fixes most of it.
 
-| Operation        | Implementation                                     | Verified                                                            |
-| ---------------- | -------------------------------------------------- | ------------------------------------------------------------------- |
-| `within(lo, hi)` | both endpoints lie inside `[lo, hi]`               | a true result means every concrete value is inside that `i64` range |
-| `nonzero`        | the interval does not contain `0`                  | a true result means no concrete value is `0`                        |
-| `nonneg`         | the lower bound is `>= 0`, which accepts `[0, +∞)` | a true result means every concrete value is `>= 0`                  |
-| `fits_u8`        | `within(0, 255)`                                   | a true result means every concrete value is in `0..=255`            |
-
-
-## 9. Verification result
-
-Checked on 2026-09-23 with Verus `0.2026.08.02.b677dd5` and `vstd = 0.0.0-2026-08-02-0125`:
-
-```text
-cargo verus verify -p semi-persistent-abstract-domains -- --verify-only-module ibig --verify-only-module interval_z --rlimit 50
-173 verified, 0 errors
-```
-
-```text
-cargo test -p semi-persistent-abstract-domains --test interval_z --offline
-22 passed, 0 failed
-```
-
+`Mul<Euclid>` and `Mul<Trunc>` both call `mul_int`. When both intervals contain 0 in their interior, the four endpoint products go through `min_ibig` and `max_ibig`, which return references and copy only the chosen endpoint. `0 * ±∞ = 0`, so `{0}` times any interval is `{0}`. The test `[-2, 3] * [-4, 5]` contains `-12` and `15`, and excludes `-13` and `16`.
