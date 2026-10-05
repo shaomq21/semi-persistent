@@ -138,8 +138,8 @@ cargo verus verify
 # Verify only the Unum module
 cargo verus verify -- --verify-only-module unum
 
-# Verify IntervalZ (ibig + interval_z)
-cargo verus verify -- --verify-only-module ibig --verify-only-module interval_z --rlimit 50
+# Verify IntervalZ
+cargo verus focus -p semi-persistent-abstract-domains -- --verify-only-module interval_z --rlimit 50
 
 # Per-module timing breakdown
 cargo verus verify -- --time-expanded
@@ -171,5 +171,5 @@ cargo run --features bin
 - [Abstract domains design](doc/design.md): overall architecture and proof methodology.
 - [Interval soundness](doc/interval-soundness.md): the contracts implemented
   by the current unsigned interval component.
-- [IntervalZ](doc/interval-z.md): unbounded integer intervals. Each operation,
-  what Verus checks, and the 168 / 0 result.
+- [IntervalZ](doc/interval-z.md): unbounded integer intervals. Each review
+  comment and what changed is recorded there.
