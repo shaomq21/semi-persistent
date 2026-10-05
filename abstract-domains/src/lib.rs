@@ -20,6 +20,7 @@
 //!   See doc/domain-traits.md.
 
 pub mod anum;
+pub mod bool4;
 pub mod bools;
 pub mod chopped;
 pub mod demo;
