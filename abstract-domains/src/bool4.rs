@@ -1,290 +1,245 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-//! Four-point boolean domain for Task 1.
+//! `Bool4`: the value of a Bool e-class.
 //!
-//! ```text
-//! Bool4  = Bottom | False | True | Top
-//! values = Bottom {}, False {false}, True {true}, Top {false, true}
-//! ```
+//! Four values: `False`, `True`, `Top`, and the empty set as `BotOr::Bot`
+//! (an e-class whose Bool value is `Bot` is a conflict). One value per
+//! nonempty set of booleans, so `Bool4` is canonical, and it is its own
+//! channel. The connectives are exact: sound, and every value of the result
+//! is produced by some pair of operand values.
 //!
-//! `Top` is the running example's unknown. `Bottom` is impossible: it contains
-//! no boolean, so a later guard must not treat it as a license. Comparison
-//! transfers and backward narrowing are a separate piece of work; this module
-//! is only the lattice and the boolean operations.
-
+//! Starting point for the Int and Bool work (doc/reduced-product.md), which adds `ite`
+//! and the backward connectives.
+// Proof-only bindings are erased outside Verus.
+#![allow(unused_variables)]
+use crate::lattice::*;
+use crate::reduce::*;
 use vstd::prelude::*;
 
 verus! {
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Bool4 {
-    Bottom,
     False,
     True,
     Top,
 }
 
+/// `∃ x ∈ γ(a). f(x) = z`, unrolled over `bool`.
+pub open spec fn reach1(a: Bool4, f: spec_fn(bool) -> bool, z: bool) -> bool {
+    (a.gamma(false) && f(false) == z) || (a.gamma(true) && f(true) == z)
+}
+
+/// `∃ x ∈ γ(a), y ∈ γ(b). f(x, y) = z`, unrolled over `bool`.
+pub open spec fn reach2(a: Bool4, b: Bool4, f: spec_fn(bool, bool) -> bool, z: bool) -> bool {
+    (a.gamma(false) && b.gamma(false) && f(false, false) == z) || (a.gamma(false) && b.gamma(true)
+        && f(false, true) == z) || (a.gamma(true) && b.gamma(false) && f(true, false) == z) || (
+    a.gamma(true) && b.gamma(true) && f(true, true) == z)
+}
+
 impl Bool4 {
-    pub open spec fn has(self, b: bool) -> bool {
-        match self {
-            Bool4::Bottom => false,
-            Bool4::False => b == false,
-            Bool4::True => b == true,
-            Bool4::Top => true,
+    pub fn constant(b: bool) -> (r: Self)
+        ensures
+            forall|x: bool| #[trigger] r.gamma(x) <==> x == b,
+    {
+        if b {
+            Bool4::True
+        } else {
+            Bool4::False
         }
     }
 
-    pub open spec fn refines(self, other: Bool4) -> bool {
-        forall|b: bool| self.has(b) ==> other.has(b)
+    /// `true` when every value is `true`.
+    pub fn is_true(&self) -> (b: bool)
+        ensures
+            b <==> (self.gamma(true) && !self.gamma(false)),
+    {
+        matches!(self, Bool4::True)
     }
 
-    pub fn contains(self, b: bool) -> (r: bool)
+    /// `true` when every value is `false`.
+    pub fn is_false(&self) -> (b: bool)
         ensures
-            r == self.has(b),
+            b <==> (self.gamma(false) && !self.gamma(true)),
+    {
+        matches!(self, Bool4::False)
+    }
+
+    fn same(&self, o: &Self) -> (b: bool)
+        ensures
+            b <==> (*self == *o),
+    {
+        matches!(
+            (self, o),
+            (Bool4::False, Bool4::False) | (Bool4::True, Bool4::True) | (Bool4::Top, Bool4::Top)
+        )
+    }
+
+    pub fn not(&self) -> (r: Self)
+        ensures
+            forall|x: bool| #[trigger] self.gamma(x) ==> r.gamma(!x),
+            forall|z: bool| #[trigger] r.gamma(z) ==> reach1(*self, |x: bool| !x, z),
     {
         match self {
-            Bool4::Bottom => false,
-            Bool4::False => b == false,
-            Bool4::True => b == true,
-            Bool4::Top => true,
-        }
-    }
-
-    pub open spec fn join_spec(self, other: Bool4) -> Bool4 {
-        match (self, other) {
-            (Bool4::Top, _) | (_, Bool4::Top) => Bool4::Top,
-            (Bool4::Bottom, x) => x,
-            (x, Bool4::Bottom) => x,
-            (Bool4::False, Bool4::False) => Bool4::False,
-            (Bool4::True, Bool4::True) => Bool4::True,
-            (Bool4::False, Bool4::True) | (Bool4::True, Bool4::False) => Bool4::Top,
-        }
-    }
-
-    pub open spec fn meet_spec(self, other: Bool4) -> Bool4 {
-        match (self, other) {
-            (Bool4::Bottom, _) | (_, Bool4::Bottom) => Bool4::Bottom,
-            (Bool4::Top, x) => x,
-            (x, Bool4::Top) => x,
-            (Bool4::False, Bool4::False) => Bool4::False,
-            (Bool4::True, Bool4::True) => Bool4::True,
-            (Bool4::False, Bool4::True) | (Bool4::True, Bool4::False) => Bool4::Bottom,
-        }
-    }
-
-    pub open spec fn not_spec(self) -> Bool4 {
-        match self {
-            Bool4::Bottom => Bool4::Bottom,
             Bool4::False => Bool4::True,
             Bool4::True => Bool4::False,
             Bool4::Top => Bool4::Top,
         }
     }
 
-    pub open spec fn and_spec(self, other: Bool4) -> Bool4 {
-        match (self, other) {
-            (Bool4::Bottom, _) | (_, Bool4::Bottom) => Bool4::Bottom,
+    pub fn and(&self, o: &Self) -> (r: Self)
+        ensures
+            forall|x: bool, y: bool|
+                #![trigger self.gamma(x), o.gamma(y)]
+                self.gamma(x) && o.gamma(y) ==> r.gamma(x && y),
+            forall|z: bool| #[trigger]
+                r.gamma(z) ==> reach2(*self, *o, |x: bool, y: bool| x && y, z),
+    {
+        match (self, o) {
             (Bool4::False, _) | (_, Bool4::False) => Bool4::False,
             (Bool4::True, Bool4::True) => Bool4::True,
-            (Bool4::True, Bool4::Top) | (Bool4::Top, Bool4::True) | (Bool4::Top, Bool4::Top) => Bool4::Top,
+            _ => Bool4::Top,
         }
     }
 
-    pub open spec fn or_spec(self, other: Bool4) -> Bool4 {
-        match (self, other) {
-            (Bool4::Bottom, _) | (_, Bool4::Bottom) => Bool4::Bottom,
+    pub fn or(&self, o: &Self) -> (r: Self)
+        ensures
+            forall|x: bool, y: bool|
+                #![trigger self.gamma(x), o.gamma(y)]
+                self.gamma(x) && o.gamma(y) ==> r.gamma(x || y),
+            forall|z: bool| #[trigger]
+                r.gamma(z) ==> reach2(*self, *o, |x: bool, y: bool| x || y, z),
+    {
+        match (self, o) {
             (Bool4::True, _) | (_, Bool4::True) => Bool4::True,
             (Bool4::False, Bool4::False) => Bool4::False,
-            (Bool4::False, Bool4::Top) | (Bool4::Top, Bool4::False) | (Bool4::Top, Bool4::Top) => Bool4::Top,
+            _ => Bool4::Top,
         }
     }
 
-    pub fn join(self, other: Bool4) -> (r: Bool4)
+    /// Boolean equality (SMT-LIB `=` on Bool).
+    pub fn eq(&self, o: &Self) -> (r: Self)
         ensures
-            r == self.join_spec(other),
-            forall|b: bool| self.has(b) ==> r.has(b),
-            forall|b: bool| other.has(b) ==> r.has(b),
+            forall|x: bool, y: bool|
+                #![trigger self.gamma(x), o.gamma(y)]
+                self.gamma(x) && o.gamma(y) ==> r.gamma(x == y),
+            forall|z: bool| #[trigger]
+                r.gamma(z) ==> reach2(*self, *o, |x: bool, y: bool| x == y, z),
     {
-        let r = match (self, other) {
+        match (self, o) {
             (Bool4::Top, _) | (_, Bool4::Top) => Bool4::Top,
-            (Bool4::Bottom, x) => x,
-            (x, Bool4::Bottom) => x,
-            (Bool4::False, Bool4::False) => Bool4::False,
-            (Bool4::True, Bool4::True) => Bool4::True,
-            (Bool4::False, Bool4::True) | (Bool4::True, Bool4::False) => Bool4::Top,
-        };
-        r
+            _ => Bool4::constant(self.same(o)),
+        }
+    }
+}
+
+impl Domain for Bool4 {
+    type C = bool;
+
+    open spec fn wf(&self) -> bool {
+        true
     }
 
-    pub fn meet(self, other: Bool4) -> (r: Bool4)
-        ensures
-            r == self.meet_spec(other),
-            forall|b: bool| r.has(b) ==> self.has(b) && other.has(b),
-            forall|b: bool| self.has(b) && other.has(b) ==> r.has(b),
-    {
-        match (self, other) {
-            (Bool4::Bottom, _) | (_, Bool4::Bottom) => Bool4::Bottom,
-            (Bool4::Top, x) => x,
-            (x, Bool4::Top) => x,
-            (Bool4::False, Bool4::False) => Bool4::False,
-            (Bool4::True, Bool4::True) => Bool4::True,
-            (Bool4::False, Bool4::True) | (Bool4::True, Bool4::False) => Bool4::Bottom,
+    open spec fn gamma(&self, c: bool) -> bool {
+        match self {
+            Bool4::False => !c,
+            Bool4::True => c,
+            Bool4::Top => true,
         }
     }
 
-    pub fn not(self) -> (r: Bool4)
-        ensures
-            r == self.not_spec(),
-            forall|b: bool| self.has(b) ==> r.has(!b),
-    {
+    fn dup(&self) -> (r: Self) {
         match self {
-            Bool4::Bottom => Bool4::Bottom,
-            Bool4::False => Bool4::True,
-            Bool4::True => Bool4::False,
+            Bool4::False => Bool4::False,
+            Bool4::True => Bool4::True,
             Bool4::Top => Bool4::Top,
         }
     }
 
-    pub fn and(self, other: Bool4) -> (r: Bool4)
-        ensures
-            r == self.and_spec(other),
-            forall|x: bool, y: bool| self.has(x) && other.has(y) ==> r.has(x && y),
-    {
-        match (self, other) {
-            (Bool4::Bottom, _) | (_, Bool4::Bottom) => Bool4::Bottom,
-            (Bool4::False, _) | (_, Bool4::False) => Bool4::False,
-            (Bool4::True, Bool4::True) => Bool4::True,
-            (Bool4::True, Bool4::Top) | (Bool4::Top, Bool4::True) | (Bool4::Top, Bool4::Top) => Bool4::Top,
+    fn top() -> (r: Self) {
+        Bool4::Top
+    }
+
+    fn leq(&self, o: &Self) -> (b: bool) {
+        matches!(o, Bool4::Top) || self.same(o)
+    }
+
+    fn join(&self, o: &Self) -> (r: Self) {
+        if self.same(o) {
+            self.dup()
+        } else {
+            Bool4::Top
         }
     }
 
-    pub fn or(self, other: Bool4) -> (r: Bool4)
-        ensures
-            r == self.or_spec(other),
-            forall|x: bool, y: bool| self.has(x) && other.has(y) ==> r.has(x || y),
-    {
-        match (self, other) {
-            (Bool4::Bottom, _) | (_, Bool4::Bottom) => Bool4::Bottom,
-            (Bool4::True, _) | (_, Bool4::True) => Bool4::True,
-            (Bool4::False, Bool4::False) => Bool4::False,
-            (Bool4::False, Bool4::Top) | (Bool4::Top, Bool4::False) | (Bool4::Top, Bool4::Top) => Bool4::Top,
+    fn meet(&self, o: &Self) -> (r: BotOr<Self>) {
+        match (self, o) {
+            (Bool4::Top, _) => BotOr::Val(o.dup()),
+            (_, Bool4::Top) => BotOr::Val(self.dup()),
+            _ => if self.same(o) {
+                BotOr::Val(self.dup())
+            } else {
+                BotOr::Bot
+            },
+        }
+    }
+
+    fn widen(&self, o: &Self) -> (r: Self) {
+        if self.same(o) {
+            self.dup()
+        } else {
+            Bool4::Top
         }
     }
 }
 
-pub proof fn join_idempotent(a: Bool4)
-    ensures
-        a.join_spec(a) == a,
-{
-}
+impl Canonical for Bool4 {
+    proof fn lemma_nonempty(&self) {
+        assert(self.gamma(true) || self.gamma(false));
+    }
 
-pub proof fn join_comm(a: Bool4, b: Bool4)
-    ensures
-        a.join_spec(b) == b.join_spec(a),
-{
-}
-
-pub proof fn join_assoc(a: Bool4, b: Bool4, c: Bool4)
-    ensures
-        a.join_spec(b).join_spec(c) == a.join_spec(b.join_spec(c)),
-{
-}
-
-pub proof fn join_bottom(a: Bool4)
-    ensures
-        a.join_spec(Bool4::Bottom) == a,
-{
-}
-
-pub proof fn join_top(a: Bool4)
-    ensures
-        a.join_spec(Bool4::Top) == Bool4::Top,
-{
-}
-
-pub proof fn meet_idempotent(a: Bool4)
-    ensures
-        a.meet_spec(a) == a,
-{
-}
-
-pub proof fn meet_comm(a: Bool4, b: Bool4)
-    ensures
-        a.meet_spec(b) == b.meet_spec(a),
-{
-}
-
-pub proof fn meet_assoc(a: Bool4, b: Bool4, c: Bool4)
-    ensures
-        a.meet_spec(b).meet_spec(c) == a.meet_spec(b.meet_spec(c)),
-{
-}
-
-pub proof fn meet_top(a: Bool4)
-    ensures
-        a.meet_spec(Bool4::Top) == a,
-{
-}
-
-pub proof fn meet_bottom(a: Bool4)
-    ensures
-        a.meet_spec(Bool4::Bottom) == Bool4::Bottom,
-{
-}
-
-proof fn lemma_refines_cases(a: Bool4, b: Bool4)
-    requires
-        a.refines(b),
-    ensures
-        a == Bool4::Bottom || (a == Bool4::False && (b == Bool4::False || b == Bool4::Top)) || (a
-            == Bool4::True && (b == Bool4::True || b == Bool4::Top)) || (a == Bool4::Top && b
-            == Bool4::Top),
-{
-    match (a, b) {
-        (Bool4::Bottom, _) => {},
-        (Bool4::False, Bool4::False) | (Bool4::False, Bool4::Top) => {},
-        (Bool4::True, Bool4::True) | (Bool4::True, Bool4::Top) => {},
-        (Bool4::Top, Bool4::Top) => {},
-        (Bool4::False, Bool4::Bottom) | (Bool4::False, Bool4::True) => {
-            assert(a.has(false) && !b.has(false));
-        },
-        (Bool4::True, Bool4::Bottom) | (Bool4::True, Bool4::False) => {
-            assert(a.has(true) && !b.has(true));
-        },
-        (Bool4::Top, Bool4::Bottom) | (Bool4::Top, Bool4::False) => {
-            assert(a.has(true) && !b.has(true));
-        },
-        (Bool4::Top, Bool4::True) => {
-            assert(a.has(false) && !b.has(false));
-        },
+    proof fn lemma_canonical(a: &Self, b: &Self) {
+        assert(a.gamma(true) == b.gamma(true));
+        assert(a.gamma(false) == b.gamma(false));
     }
 }
 
-pub proof fn not_monotone(a: Bool4, b: Bool4)
-    requires
-        a.refines(b),
-    ensures
-        a.not_spec().refines(b.not_spec()),
-{
-    lemma_refines_cases(a, b);
+impl Channel for Bool4 {
+    open spec fn pre_wf(&self) -> bool {
+        true
+    }
+
+    proof fn lemma_wf_pre(&self) {
+    }
+
+    fn meet_exact(&self, o: &Self) -> (r: BotOr<Self>) {
+        match (self, o) {
+            (Bool4::Top, _) => BotOr::Val(o.dup()),
+            (_, Bool4::Top) => BotOr::Val(self.dup()),
+            _ => if self.same(o) {
+                BotOr::Val(self.dup())
+            } else {
+                BotOr::Bot
+            },
+        }
+    }
+
+    /// The identity: a single field has nothing to propagate.
+    fn normalize(&self) -> (r: BotOr<Self>) {
+        BotOr::Val(self.dup())
+    }
 }
 
-pub proof fn and_monotone(a: Bool4, b: Bool4, c: Bool4)
-    requires
-        a.refines(b),
-    ensures
-        a.and_spec(c).refines(b.and_spec(c)),
-{
-    lemma_refines_cases(a, b);
-}
+/// Its own channel: `to_channel` is the identity, `refine` is the meet.
+impl Refine for Bool4 {
+    type F = Bool4;
 
-pub proof fn or_monotone(a: Bool4, b: Bool4, c: Bool4)
-    requires
-        a.refines(b),
-    ensures
-        a.or_spec(c).refines(b.or_spec(c)),
-{
-    lemma_refines_cases(a, b);
+    fn to_channel(&self) -> (f: BotOr<Bool4>) {
+        BotOr::Val(self.dup())
+    }
+
+    fn refine(&self, f: &Bool4) -> (r: BotOr<Self>) {
+        meet_normalize(self, f)
+    }
 }
 
 } // verus!
