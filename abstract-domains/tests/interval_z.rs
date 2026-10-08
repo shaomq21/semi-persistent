@@ -99,6 +99,23 @@ fn remainder_is_exact_on_singletons_and_signed() {
 }
 
 #[test]
+fn remainder_is_cut_by_the_dividend() {
+    let n = iv(-5, -5);
+    let d = iv(-5, 1);
+    let rt = quot(<IntervalZ as DivRem<Trunc>>::rem(&n, &d));
+    assert!(has(&rt, -2) && has(&rt, 0));
+    assert!(!has(&rt, -3) && !has(&rt, 1));
+    let small = iv(-2, -2);
+    let wide = iv(-10, -8);
+    let rt = quot(<IntervalZ as DivRem<Trunc>>::rem(&small, &wide));
+    assert!(has(&rt, -2) && !has(&rt, -3));
+    let nn = iv(0, 5);
+    let divs = iv(3, 100);
+    let re = quot(<IntervalZ as DivRem<Euclid>>::rem(&nn, &divs));
+    assert!(has(&re, 0) && has(&re, 5) && !has(&re, 6));
+}
+
+#[test]
 fn narrow_replaces_infinity_and_refine_meets() {
     let top = IntervalZ::new(Lo::NegInf, Hi::PosInf).unwrap();
     let fact = iv(1, 2);

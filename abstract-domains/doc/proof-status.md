@@ -80,8 +80,8 @@ trusted `num-bigint` wrapper in the ledger; it is not a verified type.
 zero. The Euclidean quotient of a finite negative by `+∞` is `-1`; the
 truncated quotient is `0`. `DivZero` is exact in both directions (`Never`
 excludes 0, `Always` is `{0}`). Remainder is the corner hull `x - q * y` when
-the quotient is one integer, and otherwise `0 <= r < |y|` (truncation keeps
-the dividend's sign). `Mul` is the endpoint product, with `0 * ±∞ = 0`.
+the quotient is one integer, and otherwise `0 <= r < |y|`, cut by `|r| <= |x|`
+where that bound holds (truncation keeps the dividend's sign). `Mul` is the endpoint product, with `0 * ±∞ = 0`.
 `narrow` and `refine` return `BotOr`. `meet_chain_sound` states that a
 concrete value in the start interval and in every fact survives the chain.
 `IBig` is trusted, so its operations are not part of the verified crate.

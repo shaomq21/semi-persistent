@@ -12,7 +12,8 @@
 //! quotients. `DivRem<Trunc>` is the same split with division toward zero.
 //! A finite negative divided by `+∞` is `-1` in the Euclidean quotient and
 //! `0` in the truncated one. Remainder uses that quotient when it is a
-//! singleton and otherwise the magnitude bound `0 <= r < |y|`.
+//! singleton and otherwise `0 <= r < |y|`, cut by `|r| <= |x|` where that
+//! holds. Truncation also uses `|r| <= (|x| - 1) / 2` when every `|y| <= |x|`.
 //! `Mul` is the endpoint product; `0 * ±∞ = 0`. `min`/`max` of those
 //! products borrow the endpoints and copy only the winner.
 // Proof-only bindings and lemma imports are erased outside Verus.
@@ -550,6 +551,7 @@ proof fn lemma_trem_range(x: int, y: int)
     ensures
         x >= 0 ==> 0 <= trem(x, y) < iabs(y),
         x < 0 ==> -iabs(y) < trem(x, y) <= 0,
+        iabs(trem(x, y)) == iabs(x) % iabs(y),
 {
     let ax = iabs(x);
     let ay = iabs(y);
@@ -559,6 +561,8 @@ proof fn lemma_trem_range(x: int, y: int)
     if x >= 0 && y > 0 {
         assert(tdiv(x, y) == x / y);
         assert(trem(x, y) == x % y);
+        assert(ax == x && ay == y);
+        assert(iabs(trem(x, y)) == ax % ay);
     } else if x >= 0 && y < 0 {
         assert(tdiv(x, y) == -(x / (-y)));
         assert(trem(x, y) == x % (-y)) by (nonlinear_arith)
@@ -566,6 +570,9 @@ proof fn lemma_trem_range(x: int, y: int)
                 y < 0,
                 tdiv(x, y) == -(x / (-y)),
         ;
+        assert(ax == x && ay == -y);
+        assert(0 <= trem(x, y));
+        assert(iabs(trem(x, y)) == ax % ay);
     } else if x < 0 && y > 0 {
         assert(tdiv(x, y) == -((-x) / y));
         assert(trem(x, y) == -((-x) % y)) by (nonlinear_arith)
@@ -574,6 +581,9 @@ proof fn lemma_trem_range(x: int, y: int)
                 y > 0,
                 tdiv(x, y) == -((-x) / y),
         ;
+        assert(ax == -x && ay == y);
+        assert(trem(x, y) <= 0);
+        assert(iabs(trem(x, y)) == ax % ay);
     } else {
         assert(x < 0 && y < 0);
         assert(tdiv(x, y) == (-x) / (-y));
@@ -583,6 +593,219 @@ proof fn lemma_trem_range(x: int, y: int)
                 y < 0,
                 tdiv(x, y) == (-x) / (-y),
         ;
+        assert(ax == -x && ay == -y);
+        assert(trem(x, y) <= 0);
+        assert(iabs(trem(x, y)) == ax % ay);
+    }
+}
+
+/// A nonnegative integer modulo a positive integer is at most itself.
+proof fn lemma_mod_le_self(n: int, k: int)
+    requires
+        n >= 0,
+        k > 0,
+    ensures
+        n % k <= n,
+{
+    lemma_mod_bound(n, k);
+    if n < k {
+        lemma_small_mod(n as nat, k as nat);
+        assert(n % k == n);
+    } else {
+        assert(n % k < k && k <= n);
+        assert(n % k <= n);
+    }
+}
+
+/// `|trem(x, y)| <= |x|`. Toward-zero division never makes a larger remainder.
+proof fn lemma_trem_abs_le_x(x: int, y: int)
+    requires
+        y != 0,
+    ensures
+        iabs(trem(x, y)) <= iabs(x),
+{
+    let ax = iabs(x);
+    let ay = iabs(y);
+    lemma_trem_range(x, y);
+    assert(ay > 0 && ax >= 0);
+    lemma_mod_le_self(ax, ay);
+    assert(iabs(trem(x, y)) == ax % ay);
+}
+
+/// Euclidean remainder of a nonnegative dividend is at most the dividend.
+proof fn lemma_euclid_rem_le_x(x: int, y: int)
+    requires
+        y != 0,
+        x >= 0,
+    ensures
+        0 <= x % y <= x,
+{
+    lemma_euclid_rem_range(x, y);
+    lemma_fundamental_div_mod(x, y);
+    assert(x == y * (x / y) + (x % y));
+    if y > 0 {
+        assert(x / y >= 0) by (nonlinear_arith)
+            requires
+                x >= 0,
+                y > 0,
+        ;
+        assert(y * (x / y) >= 0) by (nonlinear_arith)
+            requires
+                y > 0,
+                x / y >= 0,
+        ;
+    } else {
+        assert(x / y <= 0) by (nonlinear_arith)
+            requires
+                x >= 0,
+                y < 0,
+        ;
+        assert(y * (x / y) >= 0) by (nonlinear_arith)
+            requires
+                y < 0,
+                x / y <= 0,
+        ;
+    }
+    assert(x % y <= x) by (nonlinear_arith)
+        requires
+            x == y * (x / y) + (x % y),
+            y * (x / y) >= 0,
+    ;
+}
+
+/// For `1 <= k <= n`, `n % k` never exceeds `floor((n - 1) / 2)`.
+proof fn lemma_pos_rem_half(n: int, k: int)
+    requires
+        n > 0,
+        k > 0,
+        k <= n,
+    ensures
+        n % k <= (n - 1) / 2,
+{
+    lemma_mod_bound(n, k);
+    lemma_fundamental_div_mod(n, k);
+    let q = n / k;
+    let r = n % k;
+    assert(n == k * q + r);
+    assert(q >= 1) by (nonlinear_arith)
+        requires
+            n == k * q + r,
+            n >= k,
+            k > 0,
+            r >= 0,
+            r < k,
+    ;
+    if q >= 2 {
+        assert(k * q <= n) by (nonlinear_arith)
+            requires
+                n == k * q + r,
+                r >= 0,
+        ;
+        assert(2 * k <= n) by (nonlinear_arith)
+            requires
+                q >= 2,
+                k > 0,
+                k * q <= n,
+        ;
+        assert(r <= k - 1) by (nonlinear_arith)
+            requires
+                r < k,
+        ;
+        assert(2 * r <= n - 2) by (nonlinear_arith)
+            requires
+                r <= k - 1,
+                2 * k <= n,
+                r >= 0,
+        ;
+        assert(r <= (n - 1) / 2) by (nonlinear_arith)
+            requires
+                2 * r <= n - 2,
+                r >= 0,
+        ;
+    } else {
+        assert(q == 1);
+        assert(r == n - k) by (nonlinear_arith)
+            requires
+                n == k * q + r,
+                q == 1,
+        ;
+        assert(n < 2 * k) by (nonlinear_arith)
+            requires
+                r == n - k,
+                r < k,
+        ;
+        assert(2 * k >= n + 1) by (nonlinear_arith)
+            requires
+                n < 2 * k,
+        ;
+        assert(2 * r <= n - 1) by (nonlinear_arith)
+            requires
+                r == n - k,
+                2 * k >= n + 1,
+        ;
+        assert(r <= (n - 1) / 2) by (nonlinear_arith)
+            requires
+                2 * r <= n - 1,
+                r >= 0,
+        ;
+    }
+}
+
+proof fn lemma_half_mono(a: int, b: int)
+    requires
+        0 <= a <= b,
+    ensures
+        (a - 1) / 2 <= (b - 1) / 2,
+{
+    assert((a - 1) / 2 <= (b - 1) / 2) by (nonlinear_arith)
+        requires
+            a <= b,
+            0 <= a,
+    ;
+}
+
+proof fn lemma_abs_fits(t: int, b: int)
+    requires
+        iabs(t) <= b,
+    ensures
+        -b <= t <= b,
+{
+    if t >= 0 {
+        assert(iabs(t) == t);
+    } else {
+        assert(iabs(t) == -t);
+    }
+}
+
+/// Smallest absolute value of an integer in `[lo, hi]`.
+spec fn min_abs_of(lo: int, hi: int) -> int {
+    if lo <= 0 && 0 <= hi {
+        0
+    } else if hi < 0 {
+        -hi
+    } else {
+        lo
+    }
+}
+
+proof fn lemma_min_abs(lo: int, hi: int, x: int)
+    requires
+        lo <= x <= hi,
+    ensures
+        min_abs_of(lo, hi) <= iabs(x),
+{
+    if lo <= 0 && 0 <= hi {
+        assert(min_abs_of(lo, hi) == 0);
+    } else if hi < 0 {
+        assert(x < 0);
+        assert(iabs(x) == -x);
+        assert(min_abs_of(lo, hi) == -hi);
+        assert(-hi <= -x);
+    } else {
+        assert(lo > 0);
+        assert(x > 0);
+        assert(iabs(x) == x);
+        assert(min_abs_of(lo, hi) == lo);
     }
 }
 
@@ -717,6 +940,14 @@ spec fn rem_spec(trunc: bool, x: int, y: int) -> int {
     } else {
         x % y
     }
+}
+
+proof fn lemma_rem_spec_def(trunc: bool, x: int, y: int)
+    ensures
+        trunc ==> rem_spec(trunc, x, y) == trem(x, y),
+        !trunc ==> rem_spec(trunc, x, y) == x % y,
+{
+    reveal(rem_spec);
 }
 
 /// `{x | lo <= x <= hi}`.
@@ -2146,6 +2377,93 @@ impl IntervalZ {
         }
     }
 
+    fn max_abs_fin(i: &IntervalZ) -> (r: IBig)
+        requires
+            i.wf(),
+            both_fin(*i),
+        ensures
+            match (i.lo(), i.hi()) {
+                (Lo::Fin(a), Hi::Fin(b)) => r.view() == max2(iabs(a.view()), iabs(b.view()))
+                    && r.view() >= 0,
+                _ => false,
+            },
+    {
+        let a = match &i.lo {
+            Lo::Fin(v) => v,
+            Lo::NegInf => {
+                proof {
+                    assert(false);
+                }
+                return IBig::from_i64(0);
+            },
+        };
+        let b = match &i.hi {
+            Hi::Fin(v) => v,
+            Hi::PosInf => {
+                proof {
+                    assert(false);
+                }
+                return IBig::from_i64(0);
+            },
+        };
+        let aa = Self::abs_of(a);
+        let bb = Self::abs_of(b);
+        let m = max_ibig(&aa, &bb);
+        proof {
+            assert(m.view() >= 0);
+        }
+        dup_ibig(m)
+    }
+
+    fn min_abs_fin(i: &IntervalZ) -> (r: IBig)
+        requires
+            i.wf(),
+            both_fin(*i),
+        ensures
+            match (i.lo(), i.hi()) {
+                (Lo::Fin(a), Hi::Fin(b)) => r.view() == min_abs_of(a.view(), b.view()),
+                _ => false,
+            },
+    {
+        let z = IBig::from_i64(0);
+        let a = match &i.lo {
+            Lo::Fin(v) => v,
+            Lo::NegInf => {
+                proof {
+                    assert(false);
+                }
+                return IBig::from_i64(0);
+            },
+        };
+        let b = match &i.hi {
+            Hi::Fin(v) => v,
+            Hi::PosInf => {
+                proof {
+                    assert(false);
+                }
+                return IBig::from_i64(0);
+            },
+        };
+        if a.le(&z) && z.le(b) {
+            proof {
+                assert(min_abs_of(a.view(), b.view()) == 0);
+            }
+            z
+        } else if b.le(&z) && !b.is_zero() {
+            proof {
+                assert(b.view() < 0);
+                assert(min_abs_of(a.view(), b.view()) == -b.view());
+            }
+            b.neg()
+        } else {
+            proof {
+                assert(a.view() > 0);
+                assert(min_abs_of(a.view(), b.view()) == a.view());
+            }
+            a.dup()
+        }
+    }
+
     fn quot_singleton(q: &IntervalZ) -> (r: Option<IBig>)
         requires
             q.wf(),
@@ -2256,6 +2574,174 @@ impl IntervalZ {
         IntervalZ { lo, hi }
     }
 
+    /// Upper bound on `|r|`: the divisor magnitude, cut by `|r| <= |x|` when that
+    /// is sound. Truncation also uses `(|x| - 1) / 2` once every `|y| <= |x|`.
+    fn rem_cap(n: &IntervalZ, mm1: &IBig, m: &IBig, trunc: bool) -> (c: IBig)
+        requires
+            n.wf(),
+            mm1.view() == m.view() - 1,
+            m.view() >= 1,
+        ensures
+            c.view() >= 0,
+            c.view() <= mm1.view(),
+            forall|x: int, y: int|
+                #![trigger rem_spec(trunc, x, y)]
+                n.gamma(x) && y != 0 && iabs(y) <= m.view() ==> iabs(rem_spec(trunc, x, y))
+                    <= c.view(),
+    {
+        if trunc && Self::ends_fin(n) {
+            let xmax = Self::max_abs_fin(n);
+            let xmin = Self::min_abs_fin(n);
+            if m.le(&xmin) && !xmax.is_zero() {
+                let one = IBig::from_i64(1);
+                let two = IBig::from_i64(2);
+                proof {
+                    assert(xmax.view() >= 0);
+                    assert(xmax.view() != 0);
+                    assert(xmax.view() >= 1);
+                }
+                let half = xmax.sub(&one).div_euclid(&two);
+                let c = dup_ibig(min_ibig(mm1, &half));
+                proof {
+                    assert(half.view() == (xmax.view() - 1) / 2);
+                    assert(c.view() == min2(mm1.view(), half.view()));
+                    assert(half.view() >= 0) by (nonlinear_arith)
+                        requires
+                            xmax.view() >= 1,
+                            half.view() == (xmax.view() - 1) / 2,
+                    ;
+                    assert(c.view() >= 0);
+                    assert forall|x: int, y: int|
+                        #![trigger rem_spec(trunc, x, y)]
+                        n.gamma(x) && y != 0 && iabs(y) <= m.view() implies iabs(
+                        rem_spec(trunc, x, y),
+                    ) <= c.view() by {
+                        lemma_rem_spec_def(trunc, x, y);
+                        lemma_trem_range(x, y);
+                        lemma_trem_abs_le_x(x, y);
+                        match (n.lo(), n.hi()) {
+                            (Lo::Fin(a), Hi::Fin(b)) => {
+                                assert(a.view() <= x && x <= b.view());
+                                lemma_abs_le_ends(a.view(), b.view(), x);
+                                lemma_min_abs(a.view(), b.view(), x);
+                                assert(iabs(x) >= xmin.view());
+                                assert(m.view() <= xmin.view());
+                                assert(iabs(y) <= iabs(x));
+                                assert(iabs(x) >= 1);
+                                lemma_pos_rem_half(iabs(x), iabs(y));
+                                lemma_half_mono(iabs(x), xmax.view());
+                                assert(iabs(trem(x, y)) <= half.view());
+                                assert(iabs(trem(x, y)) < iabs(y));
+                                assert(iabs(trem(x, y)) <= mm1.view());
+                                assert(iabs(trem(x, y)) <= c.view());
+                                assert(iabs(rem_spec(trunc, x, y)) <= c.view());
+                            },
+                            _ => {
+                                assert(false);
+                            },
+                        }
+                    }
+                }
+                c
+            } else {
+                let c = dup_ibig(min_ibig(mm1, &xmax));
+                proof {
+                    assert(c.view() == min2(mm1.view(), xmax.view()));
+                    assert(c.view() >= 0);
+                    assert forall|x: int, y: int|
+                        #![trigger rem_spec(trunc, x, y)]
+                        n.gamma(x) && y != 0 && iabs(y) <= m.view() implies iabs(
+                        rem_spec(trunc, x, y),
+                    ) <= c.view() by {
+                        lemma_rem_spec_def(trunc, x, y);
+                        lemma_trem_range(x, y);
+                        lemma_trem_abs_le_x(x, y);
+                        match (n.lo(), n.hi()) {
+                            (Lo::Fin(a), Hi::Fin(b)) => {
+                                assert(a.view() <= x && x <= b.view());
+                                lemma_abs_le_ends(a.view(), b.view(), x);
+                                assert(iabs(x) <= xmax.view());
+                                assert(iabs(trem(x, y)) <= xmax.view());
+                                assert(iabs(trem(x, y)) < iabs(y));
+                                assert(iabs(trem(x, y)) <= mm1.view());
+                                assert(iabs(trem(x, y)) <= c.view());
+                                assert(iabs(rem_spec(trunc, x, y)) <= c.view());
+                            },
+                            _ => {
+                                assert(false);
+                            },
+                        }
+                    }
+                }
+                c
+            }
+        } else if !trunc && matches!(Self::class_of(n), Class::NonNeg) {
+            match &n.hi {
+                Hi::Fin(h) => {
+                    let c = dup_ibig(min_ibig(mm1, h));
+                    proof {
+                        assert(c.view() >= 0);
+                        assert(c.view() <= mm1.view());
+                        assert forall|x: int, y: int|
+                            #![trigger rem_spec(trunc, x, y)]
+                            n.gamma(x) && y != 0 && iabs(y) <= m.view() implies iabs(
+                            rem_spec(trunc, x, y),
+                        ) <= c.view() by {
+                            lemma_rem_spec_def(trunc, x, y);
+                            assert(x >= 0);
+                            lemma_euclid_rem_le_x(x, y);
+                            lemma_euclid_rem_range(x, y);
+                            assert(x <= h.view());
+                            assert(x % y <= c.view());
+                            assert(iabs(x % y) == x % y);
+                            assert(iabs(rem_spec(trunc, x, y)) <= c.view());
+                        }
+                    }
+                    c
+                },
+                Hi::PosInf => {
+                    let c = mm1.dup();
+                    proof {
+                        assert forall|x: int, y: int|
+                            #![trigger rem_spec(trunc, x, y)]
+                            n.gamma(x) && y != 0 && iabs(y) <= m.view() implies iabs(
+                            rem_spec(trunc, x, y),
+                        ) <= c.view() by {
+                            lemma_rem_spec_def(trunc, x, y);
+                            lemma_euclid_rem_range(x, y);
+                            assert(x % y < m.view());
+                            assert(iabs(x % y) == x % y);
+                            assert(iabs(rem_spec(trunc, x, y)) <= c.view());
+                        }
+                    }
+                    c
+                },
+            }
+        } else {
+            let c = mm1.dup();
+            proof {
+                assert forall|x: int, y: int|
+                    #![trigger rem_spec(trunc, x, y)]
+                    n.gamma(x) && y != 0 && iabs(y) <= m.view() implies iabs(rem_spec(trunc, x, y))
+                    <= c.view() by {
+                    lemma_rem_spec_def(trunc, x, y);
+                    if trunc {
+                        lemma_trem_range(x, y);
+                        assert(iabs(trem(x, y)) < iabs(y));
+                        assert(iabs(trem(x, y)) <= mm1.view());
+                        assert(iabs(rem_spec(trunc, x, y)) <= c.view());
+                    } else {
+                        lemma_euclid_rem_range(x, y);
+                        assert(x % y < m.view());
+                        assert(iabs(x % y) == x % y);
+                        assert(iabs(rem_spec(trunc, x, y)) <= c.view());
+                    }
+                }
+            }
+            c
+        }
+    }
+
     fn rem_fallback(n: &IntervalZ, d: &IntervalZ, trunc: bool) -> (r: IntervalZ)
         requires
             n.wf(),
@@ -2268,14 +2754,122 @@ impl IntervalZ {
     {
         if !Self::ends_fin(d) {
             if !trunc {
-                let r = IntervalZ { lo: Lo::Fin(IBig::from_i64(0)), hi: Hi::PosInf };
-                proof {
-                    assert forall|x: int, y: int|
-                        n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(x % y) by {
-                        lemma_euclid_rem_range(x, y);
+                if matches!(Self::class_of(n), Class::NonNeg) {
+                    match &n.hi {
+                        Hi::Fin(h) => {
+                            let hv = h.dup();
+                            let r = IntervalZ { lo: Lo::Fin(IBig::from_i64(0)), hi: Hi::Fin(hv) };
+                            proof {
+                                assert forall|x: int, y: int|
+                                    n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(
+                                    x % y,
+                                ) by {
+                                    assert(x >= 0);
+                                    lemma_euclid_rem_le_x(x, y);
+                                    assert(x <= h.view());
+                                }
+                            }
+                            r
+                        },
+                        Hi::PosInf => {
+                            let r = IntervalZ { lo: Lo::Fin(IBig::from_i64(0)), hi: Hi::PosInf };
+                            proof {
+                                assert forall|x: int, y: int|
+                                    n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(
+                                    x % y,
+                                ) by {
+                                    lemma_euclid_rem_range(x, y);
+                                }
+                            }
+                            r
+                        },
                     }
+                } else {
+                    let r = IntervalZ { lo: Lo::Fin(IBig::from_i64(0)), hi: Hi::PosInf };
+                    proof {
+                        assert forall|x: int, y: int|
+                            n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(x % y) by {
+                            lemma_euclid_rem_range(x, y);
+                        }
+                    }
+                    r
                 }
-                r
+            } else if Self::ends_fin(n) {
+                let xmax = Self::max_abs_fin(n);
+                let lo_neg = IBig::from_i64(0).sub(&xmax);
+                match Self::class_of(n) {
+                    Class::NonNeg => {
+                        let r = IntervalZ { lo: Lo::Fin(IBig::from_i64(0)), hi: Hi::Fin(xmax) };
+                        proof {
+                            assert forall|x: int, y: int|
+                                n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(
+                                trem(x, y),
+                            ) by {
+                                assert(x >= 0);
+                                lemma_trem_range(x, y);
+                                lemma_trem_abs_le_x(x, y);
+                                match (n.lo(), n.hi()) {
+                                    (Lo::Fin(a), Hi::Fin(b)) => {
+                                        lemma_abs_le_ends(a.view(), b.view(), x);
+                                    },
+                                    _ => {
+                                        assert(false);
+                                    },
+                                }
+                                lemma_abs_fits(trem(x, y), xmax.view());
+                            }
+                        }
+                        r
+                    },
+                    Class::NonPos => {
+                        let r = IntervalZ { lo: Lo::Fin(lo_neg), hi: Hi::Fin(IBig::from_i64(0)) };
+                        proof {
+                            assert(lo_neg.view() == -xmax.view());
+                            assert forall|x: int, y: int|
+                                n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(
+                                trem(x, y),
+                            ) by {
+                                assert(x <= 0);
+                                lemma_trem_range(x, y);
+                                lemma_trem_abs_le_x(x, y);
+                                match (n.lo(), n.hi()) {
+                                    (Lo::Fin(a), Hi::Fin(b)) => {
+                                        lemma_abs_le_ends(a.view(), b.view(), x);
+                                    },
+                                    _ => {
+                                        assert(false);
+                                    },
+                                }
+                                lemma_abs_fits(trem(x, y), xmax.view());
+                            }
+                        }
+                        r
+                    },
+                    Class::Mixed => {
+                        let hi_b = xmax.dup();
+                        let r = IntervalZ { lo: Lo::Fin(lo_neg), hi: Hi::Fin(hi_b) };
+                        proof {
+                            assert(lo_neg.view() == -xmax.view());
+                            assert forall|x: int, y: int|
+                                n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(
+                                trem(x, y),
+                            ) by {
+                                lemma_trem_range(x, y);
+                                lemma_trem_abs_le_x(x, y);
+                                match (n.lo(), n.hi()) {
+                                    (Lo::Fin(a), Hi::Fin(b)) => {
+                                        lemma_abs_le_ends(a.view(), b.view(), x);
+                                    },
+                                    _ => {
+                                        assert(false);
+                                    },
+                                }
+                                lemma_abs_fits(trem(x, y), xmax.view());
+                            }
+                        }
+                        r
+                    },
+                }
             } else {
                 match Self::class_of(n) {
                     Class::NonNeg => {
@@ -2348,32 +2942,40 @@ impl IntervalZ {
                     }
                 }
             }
-            let lo_neg = IBig::from_i64(0).sub(&mm1);
+            let cap = Self::rem_cap(n, &mm1, &m, trunc);
+            let lo_neg = IBig::from_i64(0).sub(&cap);
             if !trunc {
-                let r = IntervalZ { lo: Lo::Fin(IBig::from_i64(0)), hi: Hi::Fin(mm1) };
+                let r = IntervalZ { lo: Lo::Fin(IBig::from_i64(0)), hi: Hi::Fin(cap) };
                 proof {
+                    assert(cap.view() >= 0);
                     assert forall|x: int, y: int|
                         n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(x % y) by {
+                        lemma_rem_spec_def(false, x, y);
                         lemma_euclid_rem_range(x, y);
                         lemma_abs_le_ends(dl.view(), dh.view(), y);
-                        assert(x % y < m.view());
-                        assert(x % y <= mm1.view());
+                        assert(iabs(y) <= m.view());
+                        assert(iabs(rem_spec(false, x, y)) <= cap.view());
+                        assert(iabs(x % y) == x % y);
                     }
                 }
                 r
             } else {
                 match Self::class_of(n) {
                     Class::NonNeg => {
-                        let r = IntervalZ { lo: Lo::Fin(IBig::from_i64(0)), hi: Hi::Fin(mm1) };
+                        let r = IntervalZ { lo: Lo::Fin(IBig::from_i64(0)), hi: Hi::Fin(cap) };
                         proof {
+                            assert(cap.view() >= 0);
                             assert forall|x: int, y: int|
                                 n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(
                                 trem(x, y),
                             ) by {
                                 assert(x >= 0);
+                                lemma_rem_spec_def(true, x, y);
                                 lemma_trem_range(x, y);
                                 lemma_abs_le_ends(dl.view(), dh.view(), y);
-                                assert(trem(x, y) < m.view());
+                                assert(iabs(y) <= m.view());
+                                assert(iabs(rem_spec(true, x, y)) <= cap.view());
+                                lemma_abs_fits(trem(x, y), cap.view());
                             }
                         }
                         r
@@ -2381,31 +2983,38 @@ impl IntervalZ {
                     Class::NonPos => {
                         let r = IntervalZ { lo: Lo::Fin(lo_neg), hi: Hi::Fin(IBig::from_i64(0)) };
                         proof {
-                            assert(lo_neg.view() == -mm1.view());
+                            assert(lo_neg.view() == -cap.view());
                             assert forall|x: int, y: int|
                                 n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(
                                 trem(x, y),
                             ) by {
                                 assert(x <= 0);
+                                lemma_rem_spec_def(true, x, y);
                                 lemma_trem_range(x, y);
                                 lemma_abs_le_ends(dl.view(), dh.view(), y);
-                                assert(-m.view() < trem(x, y) && trem(x, y) <= 0);
-                                assert(lo_neg.view() <= trem(x, y));
+                                assert(iabs(y) <= m.view());
+                                assert(iabs(rem_spec(true, x, y)) <= cap.view());
+                                lemma_abs_fits(trem(x, y), cap.view());
                             }
                         }
                         r
                     },
                     Class::Mixed => {
-                        let hi_b = mm1.dup();
+                        let hi_b = cap.dup();
                         let r = IntervalZ { lo: Lo::Fin(lo_neg), hi: Hi::Fin(hi_b) };
                         proof {
-                            assert(lo_neg.view() == -(m.view() - 1));
+                            assert(lo_neg.view() == -cap.view());
+                            assert(hi_b.view() == cap.view());
                             assert forall|x: int, y: int|
                                 n.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] r.gamma(
                                 trem(x, y),
                             ) by {
+                                lemma_rem_spec_def(true, x, y);
                                 lemma_trem_range(x, y);
                                 lemma_abs_le_ends(dl.view(), dh.view(), y);
+                                assert(iabs(y) <= m.view());
+                                assert(iabs(rem_spec(true, x, y)) <= cap.view());
+                                lemma_abs_fits(trem(x, y), cap.view());
                             }
                         }
                         r

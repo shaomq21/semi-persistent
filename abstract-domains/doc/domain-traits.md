@@ -177,10 +177,12 @@ lift. It implements:
   `(-∞, -1]` and `[1, +∞)`; each side takes Euclidean endpoint quotients.
   A finite negative divided by `+∞` is `-1`. The flag is `DivZero`, exact in
   both directions. A singleton quotient yields the corner remainder
-  `x - q * y`; otherwise the remainder is `0 <= r < |y|`.
+  `x - q * y`; otherwise the remainder is `0 <= r < |y|`, and a nonnegative
+  dividend also keeps `r <= x`.
 - `DivRem<Trunc>`: the same split, with division toward zero (`-7 / 2 = -3`).
   A finite negative divided by `+∞` is `0`. Truncated remainder keeps the
-  sign of the dividend.
+  sign of the dividend, and `|r| <= |x|`. When every `|y| <= |x|`,
+  `|r| <= (|x| - 1) / 2`.
 
 `tests/domain_traits.rs` checks both domains at runtime against brute-force
 concretization.
