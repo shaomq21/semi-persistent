@@ -4,13 +4,9 @@ Last refreshed: 2026-10-01.
 
 ## Current result
 
-The historical crate-wide figure below is the L1–L4 machine domains and does
-**not** include IntervalZ or Bool4. Those are reported in their own sections.
-
-```text
-cargo verus verify
-1187 verified, 0 errors
-```
+`cargo verus verify` reports 0 errors; CI runs it on every pull request. This
+file does not record the number of verified items, because every change to the
+crate moves it.
 
 The project source contains no executable `admit()` or `assume()` calls. CI
 enforces that policy with a source scan and runs ordinary Verus verification.
@@ -47,7 +43,7 @@ implementation corresponds to the verified definitions.
 | L1 | bit primitives and infinite-bitstring natural operations | proved |
 | L2 | Tnum, Anum, Unum, and division theory | proved |
 | L3 | chopped bounded-width domains | every stated contract verifies; containment covers the explicit operation inventory in `design.md`, not every defined operation |
-| L4 | `ExecTnum`, `ExecAnum`, `ExecUnum`, `Interval`, `ReducedProduct` at four enabled widths | every method verifies its stated contract; containment scope is listed below |
+| L4 | `ExecTnum`, `ExecAnum`, `ExecUnum`, `Interval` at four enabled widths | every method verifies its stated contract; containment scope is listed below |
 
 All enabled L4 results are proved well formed where their contracts say so.
 The current **universal containment** contracts are:
@@ -59,17 +55,15 @@ The current **universal containment** contracts are:
 | `ExecUnum` | `top`, `add`, `from_interval`, `mul` |
 | `Interval` | `add`, `meet`, `join`, `div_const` |
 | `IntervalZ` | `add`, `neg`, `sub`, `mul`, `meet`, `join`, Cousot `widen`, `narrow`, `refine`, `DivRem<Euclid>`, `DivRem<Trunc>` |
-| `ReducedProduct` | `reduce`, `add` |
 
 The `ExecUnum` proofs use native/spec bridge lemmas, the L3 `ChoppedUnum`
 soundness theorems, explicit overflow-to-top cases, and interval-to-Unum range
-lemmas. `ReducedProduct::add` composes the four component containment
-postconditions and then applies the proved containment of `reduce`.
+lemmas. #123 removed `ReducedProduct`, whose `reduce` and `add` carried
+containment theorems; `reduce::Product` replaces it.
 
 Other executable methods currently prove well-formedness only. In particular,
 this includes Tnum multiplication, shifts, negation and subtraction, most
-Unum conversions/arithmetic helpers, and ReducedProduct bitwise operations,
-subtraction, multiplication, division, shifts, joins, meets, and negation.
+and Unum conversions/arithmetic helpers.
 Their implementations and finite mirror tests are evidence, but not universal
 containment theorems. Adding those postconditions and proofs is the remaining
 L4 soundness work.
@@ -90,28 +84,5 @@ the quotient is one integer, and otherwise `0 <= r < |y|` (truncation keeps
 the dividend's sign). `Mul` is the endpoint product, with `0 * ±∞ = 0`.
 `narrow` and `refine` return `BotOr`. `meet_chain_sound` states that a
 concrete value in the start interval and in every fact survives the chain.
-
-```text
-cargo verus focus -p semi-persistent-abstract-domains -- --verify-only-module interval_z --rlimit 50
-120 verified, 0 errors
-```
-
-`IBig` is trusted, so it is not part of that count. `cargo test -p semi-persistent-abstract-domains --test interval_z` checks Euclidean `-7/2 = -4`, truncated `-7/2 = -3`, a negative divided by `+∞`, singleton remainders, and `narrow`.
-
-## Bool4 (Task 1 §2, piece A)
-
-`abstract-domains/src/bool4.rs` is the four-point boolean
-`Bottom | False | True | Top`. Comparisons and backward narrowing are piece B;
-the split is [bool4-split.md](bool4-split.md).
-
-Proved, with no `admit()`/`assume()`: containment of `join`, `meet`, `not`,
-`and`, and `or`; the §3.5 laws of `meet` and `join`; monotonicity of `not`,
-`and`, and `or`.
-
-```text
-cargo verus verify -p semi-persistent-abstract-domains -- --verify-only-module bool4 --rlimit 50
-21 verified, 0 errors
-```
-
-`cargo test -p semi-persistent-abstract-domains --test bool4` (3 tests) enumerates
-the lattice laws and the concrete boolean operations.
+`IBig` is trusted, so its operations are not part of the verified crate.
+`cargo test -p semi-persistent-abstract-domains --test interval_z` checks Euclidean `-7/2 = -4`, truncated `-7/2 = -3`, a negative divided by `+∞`, singleton remainders, and `narrow`.
