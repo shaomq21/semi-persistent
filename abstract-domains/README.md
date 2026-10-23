@@ -134,7 +134,7 @@ cargo verus verify
 cargo verus verify -- --verify-only-module unum
 
 # Verify IntervalZ
-cargo verus focus -p semi-persistent-abstract-domains -- --verify-only-module interval_z --rlimit 50
+cargo verus focus -p semi-persistent-abstract-domains -- --verify-only-module interval_z
 
 # Per-module timing breakdown
 cargo verus verify -- --time-expanded
